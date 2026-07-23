@@ -187,7 +187,7 @@ def _safe_propagated_sem(sem_a: float, sem_b: float) -> float:
 
     if sem_a is None or sem_b is None or np.isnan(sem_a) or np.isnan(sem_b):
         return np.nan
-    return float(np.sqrt(sem_a ** 2 + sem_b ** 2))
+    return float(np.sqrt(sem_a ** 2 + sem_b ** 2)) #can fix actually, need to sep
 
 
 @dataclass(frozen=True)

@@ -7,7 +7,7 @@ WORKFLOW SUMMARY
 -----------------
 1. Load PIXC heights, river centreline, river boundary/AOI and the
    satellite ground track; reproject everything into one projected
-   (metre-based) CRS.
+   metre based CRS.
 2. Clean the PIXC height values, auditing how many rows are removed
    at each stage (null/empty geometry, non-finite coordinates,
    non-finite height).
@@ -26,11 +26,9 @@ WORKFLOW SUMMARY
    split successful/failed tables, print a terminal summary, and
    optionally save diagnostic plots for a handful of reaches.
 
-THIS SCRIPT VS. YOUR PLANNED MODULE SPLIT
+THIS SCRIPT VS. MODULE SPLIT
 -----------------
-This is one file so it is easy to run and sanity-check end-to-end,
-but it is organised into clearly labelled sections that map directly
-onto the module breakdown you mentioned:
+
 
     SECTION: config.py       -> HeightAnalysisConfig + validation
     SECTION: io_utils.py     -> file validation, loading, projection,
