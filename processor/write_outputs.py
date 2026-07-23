@@ -262,6 +262,197 @@ def plot_reach_diagnostics(
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
+from pathlib import Path
+import logging
+
+import geopandas as gpd
+import numpy as np
+import pandas as pd
+import xarray as xr
+
+logger = logging.getLogger("river_height_analysis")
+
+
+def write_reach_results_netcdf(
+    reach_results: pd.DataFrame,
+    output_path: Path,
+    source_crs: str = "EPSG:32632",
+) -> None:
+    """
+    Write selected cross-river height results to a NetCDF file.
+
+    One NetCDF record is written for each attempted perpendicular reach.
+    Failed or unavailable measurements are stored as NaN.
+    """
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    required_columns = [
+        "centre_x_m",
+        "centre_y_m",
+        "positive_mean_height",
+        "negative_mean_height",
+        "n_positive",
+        "n_negative",
+        "centre_mean_height",
+        "n_centre",
+        "delta_h_centre_minus_positive",
+        "delta_h_centre_minus_negative",
+    ]
+
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in reach_results.columns
+    ]
+
+    if missing_columns:
+        raise KeyError(
+            "Cannot write NetCDF. Missing result columns: "
+            + ", ".join(missing_columns)
+        )
+
+    # Convert the representative reach centres from projected coordinates
+    # to geographic longitude and latitude.
+    reach_locations = gpd.GeoDataFrame(
+        reach_results.copy(),
+        geometry=gpd.points_from_xy(
+            reach_results["centre_x_m"],
+            reach_results["centre_y_m"],
+        ),
+        crs=source_crs,
+    ).to_crs("EPSG:4326")
+
+    longitude = reach_locations.geometry.x.to_numpy(dtype=float)
+    latitude = reach_locations.geometry.y.to_numpy(dtype=float)
+
+    def numeric_values(column_name: str) -> np.ndarray:
+        """Convert a DataFrame column safely to floating-point values."""
+
+        return pd.to_numeric(
+            reach_results[column_name],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+
+    dataset = xr.Dataset(
+        data_vars={
+            "latitude": (
+                "reach",
+                latitude,
+                {
+                    "long_name": "Representative reach latitude",
+                    "units": "degrees_north",
+                },
+            ),
+            "longitude": (
+                "reach",
+                longitude,
+                {
+                    "long_name": "Representative reach longitude",
+                    "units": "degrees_east",
+                },
+            ),
+            "height_positive": (
+                "reach",
+                numeric_values("positive_mean_height"),
+                {
+                    "long_name": "Mean height on the positive side",
+                    "units": "m",
+                },
+            ),
+            "height_negative": (
+                "reach",
+                numeric_values("negative_mean_height"),
+                {
+                    "long_name": "Mean height on the negative side",
+                    "units": "m",
+                },
+            ),
+            "n_points_positive": (
+                "reach",
+                numeric_values("n_positive").astype(np.int32),
+                {
+                    "long_name": "Number of points in the positive sample",
+                    "units": "1",
+                },
+            ),
+            "n_points_negative": (
+                "reach",
+                numeric_values("n_negative").astype(np.int32),
+                {
+                    "long_name": "Number of points in the negative sample",
+                    "units": "1",
+                },
+            ),
+            "height_centre": (
+                "reach",
+                numeric_values("centre_mean_height"),
+                {
+                    "long_name": "Mean height in the centre sample",
+                    "units": "m",
+                },
+            ),
+            "n_points_centre": (
+                "reach",
+                numeric_values("n_centre").astype(np.int32),
+                {
+                    "long_name": "Number of points in the centre sample",
+                    "units": "1",
+                },
+            ),
+            "delta_h_positive_mean": (
+                "reach",
+                numeric_values("delta_h_centre_minus_positive"),
+                {
+                    "long_name": (
+                        "Mean centre height minus mean positive-side height"
+                    ),
+                    "units": "m",
+                },
+            ),
+            "delta_h_negative_mean": (
+                "reach",
+                numeric_values("delta_h_centre_minus_negative"),
+                {
+                    "long_name": (
+                        "Mean centre height minus mean negative-side height"
+                    ),
+                    "units": "m",
+                },
+            ),
+        },
+        coords={
+            "reach": np.arange(len(reach_results), dtype=np.int32),
+        },
+        attrs={
+            "title": "SWOT cross-river height analysis",
+            "description": (
+                "Mean height statistics and point counts for negative-side, "
+                "centre and positive-side samples at perpendicular river reaches."
+            ),
+            "source_crs": source_crs,
+        },
+    )
+
+    # Helpful identifiers/status fields, where available.
+    for optional_column in [
+        "reach_id",
+        "processing_status",
+        "quality_status",
+        "failure_code",
+    ]:
+        if optional_column in reach_results.columns:
+            dataset[optional_column] = (
+                "reach",
+                reach_results[optional_column]
+                .fillna("")
+                .astype(str)
+                .to_numpy(),
+            )
+
+    dataset.to_netcdf(output_path)
+
+    logger.info("Saved NetCDF reach results to %s", output_path)
     logger.info("Saved reach diagnostic figure to %s", output_path)
 
 

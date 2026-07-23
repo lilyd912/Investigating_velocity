@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+from write_outputs import write_reach_results_netcdf
+from corrections import apply_height_corrections
+
 from dataclasses import dataclass
 from pathlib import Path
 import logging
@@ -68,7 +71,7 @@ class HeightAnalysisRunResult:
 
 
 def run_height_analysis(config: HeightAnalysisConfig) -> HeightAnalysisRunResult:
-    configure logging()
+    
     """
     The single entry point for the whole pipeline.
 
@@ -83,7 +86,7 @@ def run_height_analysis(config: HeightAnalysisConfig) -> HeightAnalysisRunResult
     execution side effects, and no hidden globals: every value it
     needs is either passed in via `config` or computed locally.
     """
-
+    configure_logging()
     output_dirs = prepare_output_directories(config.output_directory)
     logger.info("Outputs will be saved to %s", output_dirs["root"])
 
@@ -93,28 +96,57 @@ def run_height_analysis(config: HeightAnalysisConfig) -> HeightAnalysisRunResult
     validate_file(config.river_boundary_file, "River boundary/AOI")
     validate_file(config.ground_track_file, "Satellite ground-track CSV")
 
-    pixc = load_and_project(config.pixc_file, config.target_crs, "PIXC data")
-    river_centreline = load_and_project(
-        config.centreline_file, config.target_crs, "River centreline", driver="KML"
+    pixc = load_and_project(
+        config.pixc_file,
+        config.target_crs,
+        "PIXC data",
     )
-    river_boundary = load_and_project(
-        config.river_boundary_file, config.target_crs, "River boundary/AOI"
-    )
-    satellite_track = load_ground_track(config.ground_track_file, config.target_crs)
 
-    require_columns(pixc, {config.height_column, "geometry"}, "PIXC data")
-    
-        # --- segmentation: clean, AOI, classification and flags ---
+    # Check that the raw height and correction columns exist.
+    require_columns(
+        pixc,
+        {"height", "pole_tide", "geoid", "geometry"},
+        "PIXC data",
+    )
+
+    # Apply the signed corrections:
+    # corrected height = height + pole_tide + geoid
+    pixc = apply_height_corrections(
+        pixc=pixc,
+        raw_height_column="height",
+        pole_tide_column="pole_tide",
+        geoid_column="geoid",
+        output_column="height_corrected",
+    )
+
+    river_centreline = load_and_project(
+        config.centreline_file,
+        config.target_crs,
+        "River centreline",
+        driver="KML",
+    )
+
+    river_boundary = load_and_project(
+        config.river_boundary_file,
+        config.target_crs,
+        "River boundary/AOI",
+    )
+
+    satellite_track = load_ground_track(
+        config.ground_track_file,
+        config.target_crs,
+    )
+
+    # --- segmentation: clean, AOI, classification and flags ---
     pixc_in_boundary = segment_pixc(
         pixc=pixc,
         river_boundary=river_boundary,
         height_column=config.height_column,
         allowed_classifications=None,
     )
-    
+
     # Retain this name for the returned run-result object and overview plot.
     pixc_clean = pixc_in_boundary
-
     
 
     if config.save_figures:
@@ -128,16 +160,15 @@ def run_height_analysis(config: HeightAnalysisConfig) -> HeightAnalysisRunResult
 
    
 
-        (
-            centreline_segments,
-            perpendicular_segments,
-            all_perpendicular_reaches,
-        ) = identify_perpendicular_reaches(
-            river_centreline=river_centreline,
-            satellite_track=satellite_track,
-            angle_tolerance_deg=config.angle_tolerance_deg,
-            minimum_run_length=config.minimum_run_length,
-        )
+    (
+        centreline_segments,
+        perpendicular_segments,
+        all_perpendicular_reaches,
+    ) = identify_perpendicular_reaches(
+        river_centreline=river_centreline,
+        satellite_track=satellite_track,
+        angle_tolerance_deg=config.angle_tolerance_deg,        minimum_run_length=config.minimum_run_length,
+    )
 
     if config.save_figures:
         plot_perpendicular_reaches(
@@ -210,20 +241,37 @@ def run_height_analysis(config: HeightAnalysisConfig) -> HeightAnalysisRunResult
 
 
 if __name__ == "__main__":
+    project_root = Path(__file__).resolve().parent.parent
+
     config = HeightAnalysisConfig(
-        pixc_file=Path(
-            "/content/Orco/Orco_processed/PIXC_029_234R_20250408.geojson"
+        pixc_file=(
+            project_root
+            / "inputs"
+            / "pixc"
+            / "PIXC_029_234R_20250408.geojson"
         ),
-        centreline_file=Path("/content/Orco/Orco_CL_25832.kml"),
-        river_boundary_file=Path("/content/Orco_shapefile_uav.shp"),
-        ground_track_file=Path(
-            "/content/sat_paths/sat_paths/"
-            "SWOT_L2_HR_PIXC_031_029_234R_"
+        centreline_file=(
+            project_root
+            / "inputs"
+            / "centreline"
+            / "Orco_CL_25832.kml"
+        ),
+        river_boundary_file=(
+            project_root
+            / "inputs"
+            / "river_boundary"
+            / "Orco_shapefile_uav.shp"
+        ),
+        ground_track_file=(
+            project_root
+            / "inputs"
+            / "ground_track"
+            / "SWOT_L2_HR_PIXC_031_029_234R_"
             "20250408T044534_20250408T044545_PGD0_01.csv"
         ),
-        output_directory=Path("/content/orco_height_outputs"),
+        output_directory=project_root / "outputs",
         target_crs="EPSG:32632",
-        height_column="height",
+        height_column="height_corrected",
         angle_tolerance_deg=20.0,
         minimum_run_length=3,
         local_search_radius_m=500.0,
@@ -239,6 +287,14 @@ if __name__ == "__main__":
         save_figures=True,
         max_diagnostic_reach_plots=5,
     )
-
     results = run_height_analysis(config)
 
+    
+
+
+
+
+write_reach_results_netcdf(
+    reach_results=results.all_reach_results,
+    output_path=config.output_directory / "reach_height_results.nc",
+)
